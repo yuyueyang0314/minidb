@@ -51,6 +51,8 @@ public class Main {
             var res = exec.exec(stmt);
             if (res.kind == Executor.Result.Kind.MESSAGE){
                 System.out.println(res.message);
+            } else if (res.kind == Executor.Result.Kind.ERROR) {
+                System.err.println("ERROR: " + res.message);
             } else {
                 System.out.println(String.join("\t", res.headers));
                 for (var r : res.rows){
@@ -58,7 +60,7 @@ public class Main {
                 }
             }
         } catch(Exception e){
-            e.printStackTrace();
+            System.err.println("ERROR: " + e.getMessage());
         }
     }
 }

@@ -107,6 +107,8 @@ public class Gui {
                         var res = executor.exec(stmt);
                         if (res.kind == Executor.Result.Kind.MESSAGE) {
                             log.append("[" + LocalTime.now().withNano(0) + "] " + res.message + "\n");
+                        } else if (res.kind == Executor.Result.Kind.ERROR) {
+                            log.append("[" + LocalTime.now().withNano(0) + "] ERROR: " + res.message + "\n");
                         } else {
                             DefaultTableModel model = new DefaultTableModel();
                             for (String h : res.headers) model.addColumn(h);
