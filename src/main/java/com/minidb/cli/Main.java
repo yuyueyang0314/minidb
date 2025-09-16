@@ -12,8 +12,8 @@ import java.util.*;
 public class Main {
     public static void main(String[] args) throws Exception {
         Path dbDir = Paths.get(Constants.DB_DIR);
-        Catalog catalog = new Catalog(dbDir);
-        FileManager fm = new FileManager(dbDir);
+        Catalog catalog = new Catalog(Paths.get(Constants.DB_DIR));
+        FileManager fm = new FileManager(Paths.get(Constants.DB_DIR));
         BufferPool bp = new BufferPool(64);
         Executor exec = new Executor(catalog, fm, bp);
 
@@ -33,7 +33,7 @@ public class Main {
                 }
             }
         } else {
-            com.minidb.gui.Gui.launch(exec);
+            com.minidb.gui.Gui.launch(exec,bp,fm);
         }
     }
 
