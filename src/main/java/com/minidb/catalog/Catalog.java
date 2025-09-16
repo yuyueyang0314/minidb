@@ -72,4 +72,10 @@ public class Catalog {
             throw new DBException("Load catalog failed", e);
         }
     }
+    public synchronized void dropTable(String name){
+        TableInfo t = tablesByName.remove(name.toLowerCase());
+        if (t==null) throw new com.minidb.utils.DBException("Unknown table: "+name);
+        tablesById.remove(t.tableId);
+        persist(); // 复用 v3 里的持久化
+    }
 }
