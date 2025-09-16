@@ -8,7 +8,7 @@ public class TableHeap {
     private final Schema schema;
     private final FileManager fm;
     private final BufferPool bp;
-    // Page layout: [header: int nRecords][slotOffsets...][free space][records]
+    // Page layout: [int nSlots][int freePtr][slotOffsets... (negative = free)] [free space] [records]
     public TableHeap(int tableId, Schema schema, FileManager fm, BufferPool bp){
         this.tableId = tableId; this.schema = schema; this.fm = fm; this.bp = bp;
     }
@@ -21,31 +21,50 @@ public class TableHeap {
         long sz = fm.fileSize(tableId);
         return (int)(sz / Constants.PAGE_SIZE);
     }
-    private ByteBuffer buf(Page p){ return p.buf; }
-    private boolean tryInsertInto(Page p, Record r){
-        ByteBuffer b = buf(p);
+    private void initIfNeeded(Page p){
+        ByteBuffer b = p.buf;
         b.position(0);
         int n = b.getInt();
-        if (n < 0 || n > 10000){ // uninitialized page
+        if (n < 0 || n > 100000){
             b.clear();
-            b.putInt(0); n = 0;
+            b.putInt(0);                 // nSlots
+            b.putInt(Constants.PAGE_SIZE); // freePtr
+        } else if (n==0){
+            if (b.getInt(4)==0){ b.putInt(4, Constants.PAGE_SIZE); }
         }
-        int header = 4 + (n+1)*4;
-        int freePtr = (n==0) ? Constants.PAGE_SIZE : b.getInt(4 + (n-1)*4);
+    }
+    private boolean tryInsertInto(Page p, Record r){
+        initIfNeeded(p);
+        ByteBuffer b = p.buf;
+        int n = b.getInt(0);
+        int freePtr = b.getInt(4);
+        int headerBase = 8;
+
+        // 1) 复用空槽
+        for (int idx=0; idx<n; idx++){
+            int off = b.getInt(headerBase + idx*4);
+            if (off < 0){
+                int needed = sizeOf(r);
+                if (freePtr - (headerBase + n*4) < needed) return false;
+                int recStart = freePtr - needed;
+                writeRecord(b, recStart, r);
+                b.putInt(headerBase + idx*4, recStart);
+                b.putInt(4, recStart);
+                return true;
+            }
+        }
+        // 2) 追加新槽
         int needed = sizeOf(r);
-        if (freePtr - header < needed) return false;
-        // write record at freePtr - needed
+        if (freePtr - (headerBase + n*4 + 4) < needed) return false;
         int recStart = freePtr - needed;
         writeRecord(b, recStart, r);
-        // write new slot offset
-        b.putInt(4 + n*4, recStart);
-        // update n and free pointer (implicitly as last slot)
+        b.putInt(headerBase + n*4, recStart);
         b.putInt(0, n+1);
+        b.putInt(4, recStart);
         return true;
     }
     private void writeRecord(ByteBuffer b, int pos, Record r){
         b.position(pos);
-        // record = [int ncols][each value]
         b.putInt(r.values.size());
         for (int i=0;i<r.values.size();i++){
             Object v = r.values.get(i);
@@ -92,7 +111,6 @@ public class TableHeap {
         return sz;
     }
     public void insert(Record r){
-        // try pages; otherwise allocate new
         int pages = Math.max(1, numPages());
         for (int pid=0; pid<pages; pid++){
             Page p = loadPage(pid);
@@ -103,17 +121,44 @@ public class TableHeap {
         if (!tryInsertInto(p, r)) throw new DBException("Insert failed into fresh page");
         fm.writePage(tableId, p);
     }
+    public int delete(java.util.function.Predicate<Record> pred){
+        int deleted = 0;
+        int pages = numPages();
+        for (int pid=0; pid<pages; pid++){
+            Page p = loadPage(pid);
+            initIfNeeded(p);
+            ByteBuffer b = p.buf;
+            int n = b.getInt(0);
+            int headerBase = 8;
+            for (int idx=0; idx<n; idx++){
+                int off = b.getInt(headerBase + idx*4);
+                if (off <= 0) continue;
+                Record r = readRecord(b, off);
+                if (pred.test(r)){
+                    b.putInt(headerBase + idx*4, -1); // tombstone
+                    deleted++;
+                }
+            }
+            if (deleted>0) fm.writePage(tableId, p);
+        }
+        return deleted;
+    }
     public Iterable<Record> scan(){
         return () -> new Iterator<Record>(){
             int pageCount = numPages();
             int page = 0;
             int idx = 0;
             Page cur = pageCount>0 ? loadPage(0) : null;
-            int n=cur==null?0:cur.buf.getInt(0);
+            int n = cur==null?0:cur.buf.getInt(0);
             @Override public boolean hasNext(){
                 while (true){
                     if (cur==null) return false;
-                    if (idx < n) return true;
+                    if (idx < n){
+                        int off = cur.buf.getInt(8 + idx*4);
+                        if (off>0) return true;
+                        idx++;
+                        continue;
+                    }
                     page++;
                     if (page>=pageCount) return false;
                     cur = loadPage(page);
@@ -122,10 +167,11 @@ public class TableHeap {
                 }
             }
             @Override public Record next(){
-                if (!hasNext()) throw new NoSuchElementException();
-                int off = cur.buf.getInt(4 + idx*4);
-                idx++;
-                return readRecord(cur.buf, off);
+                while (true){
+                    int off = cur.buf.getInt(8 + idx*4);
+                    idx++;
+                    if (off>0) return readRecord(cur.buf, off);
+                }
             }
         };
     }

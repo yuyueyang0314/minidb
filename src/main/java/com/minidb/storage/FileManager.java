@@ -4,6 +4,7 @@ import java.nio.file.*;
 import com.minidb.utils.*;
 public class FileManager {
     private final Path dir;
+    private long reads=0, writes=0, allocs=0;
     public FileManager(Path dir){
         this.dir = dir;
         try { Files.createDirectories(dir); } catch(IOException e){ throw new DBException("init file manager", e); }
@@ -18,11 +19,12 @@ public class FileManager {
             long offset = (long)pageId * com.minidb.utils.Constants.PAGE_SIZE;
             if (raf.length() < offset + com.minidb.utils.Constants.PAGE_SIZE){
                 byte[] zero = new byte[com.minidb.utils.Constants.PAGE_SIZE];
-                return new Page(pageId, zero);
+                reads++; return new Page(pageId, zero);
             }
             raf.seek(offset);
             byte[] data = new byte[com.minidb.utils.Constants.PAGE_SIZE];
             raf.readFully(data);
+            reads++;
             return new Page(pageId, data);
         }catch(IOException e){ throw new DBException("readPage", e); }
     }
@@ -31,12 +33,18 @@ public class FileManager {
             long offset = (long)page.pageId * com.minidb.utils.Constants.PAGE_SIZE;
             raf.seek(offset);
             raf.write(page.buf.array());
+            writes++;
         }catch(IOException e){ throw new DBException("writePage", e); }
     }
     public synchronized int allocatePage(int tableId){
         long size = fileSize(tableId);
         int nextPageId = (int)(size / com.minidb.utils.Constants.PAGE_SIZE);
         writePage(tableId, new Page(nextPageId, new byte[com.minidb.utils.Constants.PAGE_SIZE]));
+        allocs++;
         return nextPageId;
     }
+    public long reads(){ return reads; }
+    public long writes(){ return writes; }
+    public long allocs(){ return allocs; }
+    public Path dir(){ return dir; }
 }
