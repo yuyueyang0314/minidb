@@ -143,6 +143,37 @@ public class TableHeap {
         }
         return deleted;
     }
+    // 在类内添加（delete/scan 已存在）：
+    public int update(java.util.function.Predicate<Record> pred,
+                      java.util.function.Function<Record, Record> transform){
+        int updated = 0;
+        int pages = numPages();
+        for (int pid=0; pid<pages; pid++){
+            Page p = loadPage(pid);
+            initIfNeeded(p);
+            java.nio.ByteBuffer b = p.buf;
+            int n = b.getInt(0);
+            int headerBase = 8;
+            boolean dirty=false;
+            for (int idx=0; idx<n; idx++){
+                int off = b.getInt(headerBase + idx*4);
+                if (off <= 0) continue;
+                Record r = readRecord(b, off);
+                if (pred.test(r)){
+                    // tombstone old
+                    b.putInt(headerBase + idx*4, -1);
+                    dirty=true;
+                    // insert new
+                    Record nr = transform.apply(r);
+                    insert(nr); // 可能落到其他页
+                    updated++;
+                }
+            }
+            if (dirty) fm.writePage(tableId, p);
+        }
+        return updated;
+    }
+
     public Iterable<Record> scan(){
         return () -> new Iterator<Record>(){
             int pageCount = numPages();

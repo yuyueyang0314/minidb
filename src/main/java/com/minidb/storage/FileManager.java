@@ -43,6 +43,14 @@ public class FileManager {
         allocs++;
         return nextPageId;
     }
+    public synchronized void deleteTable(int tableId){
+        try {
+            Path p = tablePath(tableId);
+            java.nio.file.Files.deleteIfExists(p);
+        } catch (IOException e){
+            throw new com.minidb.utils.DBException("deleteTable", e);
+        }
+    }
     public long reads(){ return reads; }
     public long writes(){ return writes; }
     public long allocs(){ return allocs; }
