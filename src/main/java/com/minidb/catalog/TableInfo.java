@@ -8,4 +8,8 @@ public class TableInfo {
         this.schema = schema;
         this.tableId = tableId;
     }
+
+    public Schema schema() {
+        return schema;
+    }
 }

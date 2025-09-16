@@ -5,23 +5,44 @@ import com.minidb.catalog.*;
 import com.minidb.storage.*;
 import com.minidb.utils.*;
 import com.minidb.engine.plan.*;
+import com.minidb.transaction.*;
+import com.minidb.index.*;
 
 public class Executor {
     private final Catalog catalog;
     private final FileManager fm;
     private final BufferPool bp;
+    private final SemanticAnalyzer semanticAnalyzer;
+    private final TransactionManager transactionManager;
+    private final IndexManager indexManager;
+    private long currentTransactionId = -1;
 
     public Executor(Catalog catalog, FileManager fm, BufferPool bp){
         this.catalog=catalog; this.fm=fm; this.bp=bp;
+        this.semanticAnalyzer = new SemanticAnalyzer(catalog);
+        this.transactionManager = new TransactionManager(fm, bp);
+        this.indexManager = new IndexManager(catalog, fm, bp);
     }
 
     public Result exec(ast.Stmt stmt){
+        // Perform semantic analysis first
+        try {
+            semanticAnalyzer.analyze(stmt);
+        } catch (SemanticAnalyzer.SemanticException e) {
+            return Result.error("Semantic error: " + e.getMessage());
+        }
+        
         if (stmt instanceof ast.CreateTable ct) return doCreate(ct);
         if (stmt instanceof ast.DropTable  dt) return doDrop(dt);
         if (stmt instanceof ast.Insert     in) return doInsert(in);
         if (stmt instanceof ast.Update     up) return doUpdate(up);
         if (stmt instanceof ast.Delete     de) return doDelete(de);
         if (stmt instanceof ast.Select     se) return doSelect(se);
+        if (stmt instanceof ast.CreateIndex ci) return doCreateIndex(ci);
+        if (stmt instanceof ast.DropIndex  di) return doDropIndex(di);
+        if (stmt instanceof ast.BeginTransaction bt) return doBeginTransaction(bt);
+        if (stmt instanceof ast.CommitTransaction ct) return doCommitTransaction(ct);
+        if (stmt instanceof ast.RollbackTransaction rt) return doRollbackTransaction(rt);
         throw new DBException("Unsupported statement");
     }
 
@@ -166,14 +187,71 @@ public class Executor {
         }
         return String.valueOf(v);
     }
+    
+    private Result doCreateIndex(ast.CreateIndex ci) {
+        try {
+            indexManager.createIndex(ci.indexName, ci.tableName, ci.columnName);
+            return Result.message("Index created: " + ci.indexName);
+        } catch (Exception e) {
+            return Result.error("Failed to create index: " + e.getMessage());
+        }
+    }
+    
+    private Result doDropIndex(ast.DropIndex di) {
+        try {
+            indexManager.dropIndex(di.indexName);
+            return Result.message("Index dropped: " + di.indexName);
+        } catch (Exception e) {
+            return Result.error("Failed to drop index: " + e.getMessage());
+        }
+    }
+    
+    private Result doBeginTransaction(ast.BeginTransaction bt) {
+        try {
+            currentTransactionId = transactionManager.beginTransaction();
+            return Result.message("Transaction started: " + currentTransactionId);
+        } catch (Exception e) {
+            return Result.error("Failed to begin transaction: " + e.getMessage());
+        }
+    }
+    
+    private Result doCommitTransaction(ast.CommitTransaction ct) {
+        try {
+            if (currentTransactionId == -1) {
+                return Result.error("No active transaction");
+            }
+            transactionManager.commitTransaction(currentTransactionId);
+            long tid = currentTransactionId;
+            currentTransactionId = -1;
+            return Result.message("Transaction committed: " + tid);
+        } catch (Exception e) {
+            return Result.error("Failed to commit transaction: " + e.getMessage());
+        }
+    }
+    
+    private Result doRollbackTransaction(ast.RollbackTransaction rt) {
+        try {
+            if (currentTransactionId == -1) {
+                return Result.error("No active transaction");
+            }
+            transactionManager.rollbackTransaction(currentTransactionId);
+            long tid = currentTransactionId;
+            currentTransactionId = -1;
+            return Result.message("Transaction rolled back: " + tid);
+        } catch (Exception e) {
+            return Result.error("Failed to rollback transaction: " + e.getMessage());
+        }
+    }
+
 
     // ---- Result ----
     public static class Result {
-        public enum Kind { MESSAGE, TABLE }
+        public enum Kind { MESSAGE, TABLE, ERROR }
         public final Kind kind; public final String message;
         public final List<String> headers; public final List<List<Object>> rows;
         private Result(Kind k, String msg, List<String> h, List<List<Object>> r){ kind=k; message=msg; headers=h; rows=r; }
         public static Result message(String m){ return new Result(Kind.MESSAGE, m, List.of(), List.of()); }
         public static Result table(List<String> h, List<List<Object>> r){ return new Result(Kind.TABLE, null, h, r); }
+        public static Result error(String m){ return new Result(Kind.ERROR, m, List.of(), List.of()); }
     }
 }
